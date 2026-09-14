@@ -1,65 +1,90 @@
 # Global New Joiner Onboarding
 
-A global employee onboarding automation solution using **PowerShell, Microsoft Graph / Entra ID, Azure Automation, Azure Table Storage, Azure Logic Apps, and Slack**.
+A production-oriented new-joiner onboarding automation pattern using **PowerShell, Microsoft Graph / Entra ID, Azure Automation, Azure Table Storage, Azure Logic Apps, and Slack**.
 
-The solution identifies eligible new joiners, applies onboarding business rules, retrieves manager information, maintains processing state, and sends structured onboarding data to a Logic App for orchestration of notifications and downstream onboarding workflows.
+The solution discovers eligible new joiners, applies country/hire-date/business rules, retrieves manager information, tracks processing state, and hands structured onboarding data to a Logic App for notification orchestration.
+
+## Current notification design
+
+The notification flow is deliberately state-aware:
+
+- **Processed users** trigger notifications when a new onboarding result is produced.
+- **First-time missing personal email** records trigger an IT/Slack notification.
+- Previously reported missing-email users are silently skipped until their email is added or their hire date changes.
+- A run with **0 processed users and 0 new IT notifications sends no Slack message and no IT report**.
+
+## Business rules
+
+- Country is an eligibility requirement. Users with no country are not processed.
+- Department is **not** a general mandatory attribute.
+- `Field_Sales` remains a special case and is processed only for approved job titles.
+- Hire date must exist and fall inside the configured window.
+- Personal email (`OtherMails`) is required before onboarding can proceed.
+- Missing manager information is treated as a warning rather than a blocking condition.
+
+See [`docs/business-rules.md`](docs/business-rules.md).
 
 ## Architecture
 
-The high-level integration flow is:
-
 ```mermaid
 flowchart LR
-    C[Configuration\nCountries • Rules • Hire-date window • Runtime flags] --> PS[Azure Automation / PowerShell\nInvoke-NewJoinerOnboarding.ps1]
+    C[Configuration\nCountries • Rules • Hire-date window] --> PS[Azure Automation / PowerShell\nRunbook]
     G[Microsoft Graph / Entra ID\nUser + manager data] <--> PS
-    PS <--> S[(Azure Table Storage\nJoinerState\nDuplicate prevention • Retry state)]
-    PS -->|Onboarding JSON| LA[Azure Logic App\nOnboarding Orchestration]
-    LA --> V[Validate / Transform]
-    V --> N[Slack\nManager / onboarding notifications]
-    V --> D[Downstream Onboarding Systems\nIT provisioning • Access requests • Welcome workflows]
+    PS <--> S[(Azure Table Storage\nProcessing state)]
+    PS -->|Onboarding JSON| LA[Azure Logic App]
+    LA --> V[Condition + Transform]
+    V --> E[Email notifications]
+    V --> N[Slack notification]
 ```
 
-See the detailed architecture documentation: [`docs/logic-app-architecture.md`](docs/logic-app-architecture.md).
+See [`docs/logic-app-architecture.md`](docs/logic-app-architecture.md).
 
-## Core capabilities
-
-- Global country-based onboarding configuration
-- New-joiner eligibility and hire-date filtering
-- Department and job-title business rules
-- Microsoft Graph / Entra ID user and manager lookup
-- Azure Table Storage state management
-- Duplicate prevention and retry handling
-- Dry-run support
-- Optional password reset workflow
-- Structured JSON hand-off to Azure Logic Apps
-- Slack onboarding notifications
-- Extensible downstream onboarding orchestration
-
-## Recommended repository structure
+## Repository structure
 
 ```text
 new-joiner-onboarding/
 ├── scripts/
 │   └── Invoke-NewJoinerOnboarding.ps1
-├── config/
-│   ├── countries.json
-│   └── onboarding-rules.json
+├── logic-app/
+│   └── workflow.template.json
 ├── docs/
-│   ├── logic-app-architecture.md
 │   ├── architecture.md
 │   ├── business-rules.md
-│   └── runbook.md
+│   ├── logic-app-architecture.md
+│   ├── logic-app-select-fix.md
+│   └── notification-flow-fix.md
 ├── tests/
 ├── README.md
 └── .gitignore
 ```
 
+## Important Logic App detail
+
+`Select_Processed_Rows` and `Select_Skipped_Rows` must return **arrays of HTML strings**, not arrays of objects with an empty property name.
+
+Use Select **text mode** with an expression such as:
+
+```text
+@{concat(...)}
+```
+
+Then `join(..., '')` can safely concatenate the rows.
+
+See [`docs/logic-app-select-fix.md`](docs/logic-app-select-fix.md).
+
 ## Security
 
-Do not commit credentials, access tokens, client secrets, passwords, or other sensitive values to this repository.
+The repository contains templates and sanitized examples only. Do not commit:
 
-In particular, initial passwords should **not** be included in general-purpose onboarding JSON, Slack messages, logs, or documentation. If credential delivery is required, use an approved secure secret-delivery mechanism.
+- access tokens or client secrets
+- passwords
+- Slack webhook URLs
+- tenant/subscription identifiers that are not intended for publication
+- employee names, work emails, or other personal data
+- production connection IDs
 
-## Scope
+Use placeholders in repository templates and configure environment-specific values in Azure.
 
-This repository is intended to support **global onboarding**. Countries, business rules, and Field Sales exceptions should be treated as configuration so that additional regions can be added without redesigning the core workflow.
+## Change log
+
+The current notification-flow update removes the department mandatory check, keeps country filtering, makes missing personal email the explicit blocking attribute, fixes the diagnostic `missingOtherMail` logic, and preserves the zero-activity Slack rule.
