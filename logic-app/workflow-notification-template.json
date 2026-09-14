@@ -1,0 +1,49 @@
+{
+  "description": "Sanitized notification section for the onboarding Logic App. Environment-specific connectors and endpoints must be configured separately.",
+  "condition": {
+    "type": "If",
+    "expression": {
+      "or": [
+        {
+          "greater": [
+            "@body('Parse_JSON')?['matchedUsersCount']",
+            0
+          ]
+        },
+        {
+          "greater": [
+            "@body('Parse_JSON')?['skippedNotifyCount']",
+            0
+          ]
+        }
+      ]
+    },
+    "comment": "Do not use skippedUsersCount here. Already-notified skipped users must not trigger Slack or the IT report."
+  },
+  "actions": {
+    "Select_Processed_Rows": {
+      "type": "Select",
+      "inputs": {
+        "from": "@body('Parse_JSON')?['users']",
+        "select": "@{concat('<tr><td>', item()?['displayName'], '</td><td>', item()?['userPrincipalName'], '</td><td>', item()?['country'], '</td><td>', item()?['department'], '</td><td>', item()?['hireDate'], '</td><td>', item()?['passwordResetStatus'], '</td></tr>')}"
+      },
+      "comment": "TEXT MODE: select must be a string expression, not an object map."
+    },
+    "Select_Skipped_Rows": {
+      "type": "Select",
+      "inputs": {
+        "from": "@body('Parse_JSON')?['skippedUsersToNotify']",
+        "select": "@{concat('<tr><td>', item()?['displayName'], '</td><td>', item()?['userPrincipalName'], '</td><td>', item()?['country'], '</td><td>', item()?['department'], '</td><td>', item()?['hireDate'], '</td><td>', item()?['missingFields'], '</td></tr>')}"
+      },
+      "comment": "TEXT MODE: select must be a string expression, not an object map."
+    },
+    "ReportJoinExpressions": {
+      "processedRows": "@join(body('Select_Processed_Rows'), '')",
+      "skippedRows": "@join(body('Select_Skipped_Rows'), '')"
+    },
+    "SlackGate": {
+      "sendWhen": "@or(greater(body('Parse_JSON')?['matchedUsersCount'], 0), greater(body('Parse_JSON')?['skippedNotifyCount'], 0))",
+      "sendWhenFalse": "No Slack message and no IT report."
+    }
+  }
+}
