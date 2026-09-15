@@ -1,90 +1,163 @@
-# Global New Joiner Onboarding
+# New Joiner Onboarding Automation
 
-A production-oriented new-joiner onboarding automation pattern using **PowerShell, Microsoft Graph / Entra ID, Azure Automation, Azure Table Storage, Azure Logic Apps, and Slack**.
+> Portfolio project: an end-to-end JML onboarding workflow built around Azure Automation, PowerShell, Microsoft Graph, Azure Table Storage and Azure Logic Apps.
 
-The solution discovers eligible new joiners, applies country/hire-date/business rules, retrieves manager information, tracks processing state, and hands structured onboarding data to a Logic App for notification orchestration.
+[![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)](https://learn.microsoft.com/powershell/)
+[![Azure Automation](https://img.shields.io/badge/Azure%20Automation-Runbook-0078D4)](https://learn.microsoft.com/azure/automation/)
+[![Microsoft Graph](https://img.shields.io/badge/Microsoft%20Graph-API-5E5CE6)](https://learn.microsoft.com/graph/)
+[![Azure Logic Apps](https://img.shields.io/badge/Azure%20Logic%20Apps-Workflow-0078D4)](https://learn.microsoft.com/azure/logic-apps/)
 
-## Current notification design
+## Project overview
 
-The notification flow is deliberately state-aware:
+This project automates the operational workflow for new joiners from eligibility detection through onboarding notification and IT reporting.
 
-- **Processed users** trigger notifications when a new onboarding result is produced.
-- **First-time missing personal email** records trigger an IT/Slack notification.
-- Previously reported missing-email users are silently skipped until their email is added or their hire date changes.
-- A run with **0 processed users and 0 new IT notifications sends no Slack message and no IT report**.
+The core automation runs as a PowerShell Runbook. It reads user and manager information through Microsoft Graph, applies configurable onboarding rules, persists processing state in Azure Table Storage, and emits a structured JSON result consumed by an Azure Logic App.
 
-## Business rules
+The Logic App turns that result into user onboarding emails, manager notifications, an IT report, and a Slack notification when there is meaningful activity.
 
-- Country is an eligibility requirement. Users with no country are not processed.
-- Department is **not** a general mandatory attribute.
-- `Field_Sales` remains a special case and is processed only for approved job titles.
-- Hire date must exist and fall inside the configured window.
-- Personal email (`OtherMails`) is required before onboarding can proceed.
-- Missing manager information is treated as a warning rather than a blocking condition.
+This repository is a **sanitized portfolio implementation**. Production-specific identifiers, endpoints, personal data, secrets, and connection details are intentionally replaced with placeholders.
 
-See [`docs/business-rules.md`](docs/business-rules.md).
+## Why this project is interesting
+
+This is not only a provisioning script. The main engineering challenge is making the workflow **predictable, state-aware, and safe to operate repeatedly**.
+
+The implementation demonstrates:
+
+- **Eligibility filtering** — country and hire-date rules are evaluated before onboarding actions.
+- **Business-rule exceptions** — `Field_Sales` has an additional job-title requirement while department remains optional for normal users.
+- **Blocking vs warning attributes** — missing personal email blocks onboarding; missing manager information produces a warning.
+- **Idempotent notifications** — Azure Table Storage prevents repeated IT/Slack alerts for the same missing-email condition.
+- **Structured integration** — the Runbook produces a stable JSON contract for the Logic App.
+- **Conditional notifications** — Slack and IT reporting are suppressed when there is no newly processed user and no first-time notification-worthy skip.
+- **Operational diagnostics** — skipped users carry explicit reasons such as `otherMail` instead of relying on inferred fields.
+- **Portfolio-safe design** — environment-specific values are configuration placeholders rather than embedded production details.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    C[Configuration\nCountries • Rules • Hire-date window] --> PS[Azure Automation / PowerShell\nRunbook]
-    G[Microsoft Graph / Entra ID\nUser + manager data] <--> PS
-    PS <--> S[(Azure Table Storage\nProcessing state)]
-    PS -->|Onboarding JSON| LA[Azure Logic App]
-    LA --> V[Condition + Transform]
-    V --> E[Email notifications]
-    V --> N[Slack notification]
+    C[Configuration\nCountries • Hire-date window • Rules]
+    G[Microsoft Graph / Entra ID\nUsers + managers]
+    PS[Azure Automation\nPowerShell Runbook]
+    S[(Azure Table Storage\nOnboarding state)]
+    LA[Azure Logic App\nNotification orchestration]
+    U[New Joiner\nEmail]
+    M[Manager\nEmail]
+    IT[IT Report\nEmail]
+    SL[Slack\nActivity notification]
+
+    C --> PS
+    G <--> PS
+    PS <--> S
+    PS -->|Structured JSON| LA
+    LA --> U
+    LA --> M
+    LA --> IT
+    LA --> SL
 ```
 
-See [`docs/logic-app-architecture.md`](docs/logic-app-architecture.md).
+See [`docs/architecture.md`](docs/architecture.md) for the component responsibilities and data flow.
+
+## End-to-end flow
+
+1. The scheduled automation starts with configured countries and a hire-date window.
+2. Microsoft Graph supplies eligible user and manager data.
+3. Country eligibility and hire-date requirements are evaluated.
+4. Department remains optional except for the `Field_Sales` title rule.
+5. Personal email (`OtherMails`) is validated as a blocking onboarding requirement.
+6. Existing Table Storage state is checked to avoid duplicate missing-email notifications.
+7. Eligible users are processed and their onboarding state is persisted.
+8. The Runbook returns structured JSON containing processed users, skipped users, notification-worthy skips, manager groups, and diagnostic counts.
+9. The Logic App sends the appropriate user and manager notifications.
+10. IT/Slack reporting occurs only when the run produced processed users or first-time notification-worthy skips.
+
+## Business rules
+
+| Area | Rule | Outcome |
+|---|---|---|
+| Country | Country must exist and be in the configured list | Otherwise ignored |
+| Hire date | Hire date is required and must be inside the configured window | Otherwise ignored |
+| Department | Not generally mandatory | User can continue without it |
+| Field Sales | `Field_Sales` requires an approved job title | Otherwise skipped |
+| Personal email | `OtherMails` is required | Blocks onboarding and creates a skip record |
+| Manager | Missing manager is allowed | Warning only |
+| Repeat missing email | Same user + same hire date already notified | No repeated IT/Slack alert |
+| Zero activity | No processed users and no new notification-worthy skips | No Slack / IT report |
+
+The detailed rules are documented in [`docs/business-rules.md`](docs/business-rules.md).
 
 ## Repository structure
 
 ```text
 new-joiner-onboarding/
+├── README.md
 ├── scripts/
 │   └── Invoke-NewJoinerOnboarding.ps1
 ├── logic-app/
-│   └── workflow.template.json
-├── docs/
-│   ├── architecture.md
-│   ├── business-rules.md
-│   ├── logic-app-architecture.md
-│   ├── logic-app-select-fix.md
-│   └── notification-flow-fix.md
-├── tests/
-├── README.md
-└── .gitignore
+│   └── workflow-notification-template.json
+└── docs/
+    ├── architecture.md
+    ├── business-rules.md
+    ├── logic-app-select-fix.md
+    └── notification-flow-fix.md
 ```
 
-## Important Logic App detail
+## Key implementation details
 
-`Select_Processed_Rows` and `Select_Skipped_Rows` must return **arrays of HTML strings**, not arrays of objects with an empty property name.
+### State-aware notification
 
-Use Select **text mode** with an expression such as:
+Missing personal email is a blocking condition, but the same user should not generate a new IT/Slack alert on every scheduled run. The Runbook therefore records the onboarding state and distinguishes a first notification from an already-reported condition.
 
-```text
-@{concat(...)}
-```
+### Stable output contract
 
-Then `join(..., '')` can safely concatenate the rows.
+The Runbook exposes separate collections for different consumers, including:
 
-See [`docs/logic-app-select-fix.md`](docs/logic-app-select-fix.md).
+- `users` — successfully processed joiners
+- `skippedUsers` — skipped records with reasons
+- `skippedUsersToNotify` — only first-time notification-worthy skips
+- `matchedUsersCount` — processed-user count
+- `skippedUsersCount` — total skipped-user count
+- `skippedNotifyCount` — notification-worthy skip count
 
-## Security
+This separation lets the Logic App make notification decisions without reconstructing business logic.
 
-The repository contains templates and sanitized examples only. Do not commit:
+### Logic App HTML transformation
 
-- access tokens or client secrets
-- passwords
-- Slack webhook URLs
-- tenant/subscription identifiers that are not intended for publication
-- employee names, work emails, or other personal data
-- production connection IDs
+The Logic App uses Select actions to build HTML table rows. Those Select actions must operate in **text mode** so the result is an array of HTML strings. The Join action then combines the strings into the final report.
 
-Use placeholders in repository templates and configure environment-specific values in Azure.
+The repository includes the troubleshooting note in [`docs/logic-app-select-fix.md`](docs/logic-app-select-fix.md).
 
-## Change log
+## Security and sanitization
 
-The current notification-flow update removes the department mandatory check, keeps country filtering, makes missing personal email the explicit blocking attribute, fixes the diagnostic `missingOtherMail` logic, and preserves the zero-activity Slack rule.
+The repository intentionally excludes production secrets and identifiers. Do not add:
+
+- access tokens, client secrets, passwords, or certificates
+- Slack webhook URLs or other secret endpoints
+- employee names, personal/work email addresses, or production user data
+- Azure tenant, subscription, resource, or connection identifiers unless intentionally public
+- production Logic App callback URLs
+
+Configure environment-specific values in Azure rather than committing them to source control.
+
+## Portfolio / learning outcomes
+
+This project demonstrates practical experience with:
+
+- PowerShell automation and defensive control flow
+- Microsoft Graph user and manager integration
+- Azure Automation Runbooks
+- Azure Table Storage state management
+- Azure Logic Apps and JSON-based integration contracts
+- Email and Slack notification orchestration
+- Idempotency and duplicate-notification prevention
+- Translating business requirements into explicit technical rules
+- Troubleshooting workflow data transformations
+- Sanitizing production automation for reusable documentation
+
+## Project status
+
+The repository is being maintained as a portfolio-safe reference implementation. The code reflects the onboarding workflow and notification fixes developed during the project while keeping production-specific configuration outside source control.
+
+## License
+
+No license is currently declared. If this repository is made public, add a license that matches how you want others to use the portfolio code.
